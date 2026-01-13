@@ -1,0 +1,20 @@
+# Environment variables
+.env
+
+# Devenv
+.devenv*
+devenv.local.nix
+
+# direnv
+.direnv
+
+# pre-commit
+.pre-commit-config.yaml
+
+# Rust
+/target
+
+# Apps
+apps
+config.json
+

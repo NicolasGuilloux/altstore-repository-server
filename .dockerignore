@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+.github
+
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Development
+.devenv
+.direnv
+.envrc
+.env
+.env.*
+devenv.yaml
+devenv.nix
+devenv.lock
+flake.nix
+flake.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation
+README.md
+CLAUDE.md
+PLAN.md
+LICENSE
+*.md
+
+# Apps (will be mounted as volume)
+apps/
+
+# Other
+.DS_Store
