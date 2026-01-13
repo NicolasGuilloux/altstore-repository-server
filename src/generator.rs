@@ -1,5 +1,6 @@
 use crate::discovery::IpaIndex;
 use crate::models::{AppVersion, Config, Repository};
+use crate::token::generate_download_token;
 use anyhow::{Context, Result};
 
 /// Generates a repository from config and discovered IPAs
@@ -7,6 +8,8 @@ pub fn generate_repository(
     config: Config,
     ipa_index: &IpaIndex,
     base_url: &str,
+    download_secret: Option<&str>,
+    auth_token: Option<&str>,
 ) -> Result<Repository> {
     let mut repo = config;
 
@@ -61,12 +64,31 @@ pub fn generate_repository(
 
                 match version_info {
                     Ok(version_info) => {
-                        let download_url = format!(
-                            "{}/apps/{}/{}",
-                            base_url.trim_end_matches('/'),
-                            app_dir_name,
-                            ipa.filename
-                        );
+                        // Generate download URL - use obfuscated token if secret is configured
+                        let download_url = if download_secret.is_some() {
+                            // Obfuscated URLs don't need auth token - the obfuscation itself is the auth
+                            let token = generate_download_token(
+                                &app_dir_name,
+                                &ipa.filename,
+                                download_secret,
+                            );
+                            format!("{}/download/{}", base_url.trim_end_matches('/'), token)
+                        } else {
+                            // Standard URLs need auth token appended if configured
+                            let mut url = format!(
+                                "{}/apps/{}/{}",
+                                base_url.trim_end_matches('/'),
+                                app_dir_name,
+                                ipa.filename
+                            );
+
+                            if let Some(token) = auth_token {
+                                url.push_str("?token=");
+                                url.push_str(token);
+                            }
+
+                            url
+                        };
 
                         discovered_versions.push(AppVersion {
                             version: version_info.version,
@@ -90,8 +112,11 @@ pub fn generate_repository(
         }
 
         // Merge versions: manual versions take precedence over discovered ones
-        app.versions = merge_versions(manual_versions, discovered_versions);
+        app.versions = merge_versions(manual_versions, discovered_versions, auth_token);
     }
+
+    // Set sourceURL to the root endpoint
+    repo.source_url = base_url.trim_end_matches('/').to_string();
 
     Ok(repo)
 }
@@ -107,7 +132,7 @@ struct VersionInfo {
 /// Parse version information from IPA filename
 /// Expected format: AppName_x.y.z_a.b.c.ipa or similar patterns
 /// Examples:
-/// - YouTubePlus_5.2b1_20.26.7.ipa -> version "20.26.7"
+/// - YourApp_v1.2.3.ipa -> version "20.26.7"
 /// - MyApp_1.2.3.ipa -> version "1.2.3"
 fn parse_version_from_filename(filename: &str, file_date: &str) -> Result<VersionInfo> {
     // Remove .ipa extension
@@ -120,7 +145,7 @@ fn parse_version_from_filename(filename: &str, file_date: &str) -> Result<Versio
 
     // Try different parsing strategies based on the number of parts
     let (version, tweak_version) = match parts.len() {
-        // Format: AppName_tweakVersion_appVersion.ipa (e.g., YouTubePlus_5.2b1_20.26.7.ipa)
+        // Format: AppName_appVersion.ipa (e.g., YourApp_v1.2.3.ipa)
         3 => {
             let tweak = parts[1].to_string();
             let app_ver = parts[2].to_string();
@@ -165,6 +190,7 @@ fn get_app_directory_name(app_name: &str) -> String {
 fn merge_versions(
     manual_versions: Vec<AppVersion>,
     discovered_versions: Vec<AppVersion>,
+    auth_token: Option<&str>,
 ) -> Vec<AppVersion> {
     use std::collections::HashMap;
 
@@ -174,6 +200,9 @@ fn merge_versions(
         .map(|v| (v.version.clone(), v))
         .collect();
 
+    // Track which manual versions were matched with discovered IPAs
+    let mut matched_manual_versions = std::collections::HashSet::new();
+
     // Process discovered versions
     for discovered in discovered_versions {
         if let Some(manual) = manual_map.get_mut(&discovered.version) {
@@ -181,6 +210,7 @@ fn merge_versions(
             // Keep manual entry but update download URL and size from IPA file
             manual.download_url = discovered.download_url;
             manual.size = discovered.size;
+            matched_manual_versions.insert(discovered.version.clone());
             tracing::debug!(
                 "Merged version {}: kept manual metadata, updated URL and size from IPA",
                 discovered.version
@@ -189,6 +219,23 @@ fn merge_versions(
             // This is a new discovered version not in manual config
             manual_map.insert(discovered.version.clone(), discovered);
             tracing::debug!("Added discovered version {}", manual_map.len());
+        }
+    }
+
+    // For manual versions that don't have matching IPAs, append auth token if present
+    // Skip obfuscated URLs (those starting with /download/) as they use the token for auth
+    if let Some(token) = auth_token {
+        for (version_str, version) in manual_map.iter_mut() {
+            if !matched_manual_versions.contains(version_str) {
+                // This manual version doesn't have a matching IPA
+                // Only append token to non-obfuscated URLs
+                if !version.download_url.contains('?')
+                    && !version.download_url.contains("/download/")
+                {
+                    version.download_url.push_str("?token=");
+                    version.download_url.push_str(token);
+                }
+            }
         }
     }
 
@@ -205,8 +252,7 @@ mod tests {
 
     #[test]
     fn test_parse_version_from_filename_three_parts() {
-        let result =
-            parse_version_from_filename("YouTubePlus_5.2b1_20.26.7.ipa", "2025-01-13").unwrap();
+        let result = parse_version_from_filename("YourApp_v1.2.3.ipa", "2025-01-13").unwrap();
         assert_eq!(result.version, "20.26.7");
         assert!(result.description.contains("5.2b1"));
         assert_eq!(result.date, "2025-01-13");
@@ -243,7 +289,7 @@ mod tests {
             size: 2000,
         }];
 
-        let merged = merge_versions(manual, discovered);
+        let merged = merge_versions(manual, discovered, None);
 
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].version, "1.0.0");
@@ -282,7 +328,7 @@ mod tests {
             },
         ];
 
-        let merged = merge_versions(manual, discovered);
+        let merged = merge_versions(manual, discovered, None);
 
         assert_eq!(merged.len(), 2);
         // Should be sorted by date (newest first)
@@ -302,7 +348,7 @@ mod tests {
             size: 1000,
         }];
 
-        let merged = merge_versions(manual, discovered);
+        let merged = merge_versions(manual, discovered, None);
 
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].version, "1.0.0");

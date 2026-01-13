@@ -1,14 +1,16 @@
+mod auth;
 mod discovery;
 mod generator;
 mod ipa_info;
 mod models;
 mod routes;
 mod state;
+mod token;
 
 use anyhow::{Context, Result};
 use axum::{
-    http::{header, Method, StatusCode},
-    response::{Html, IntoResponse},
+    http::{header, Method},
+    middleware,
     routing::get,
     Router,
 };
@@ -38,6 +40,14 @@ struct Args {
     /// Directory containing app IPA files
     #[arg(long, env = "APPS_DIR", default_value = "apps")]
     apps_dir: PathBuf,
+
+    /// Optional authentication token required as query parameter
+    #[arg(long, env = "AUTH_TOKEN")]
+    auth_token: Option<String>,
+
+    /// Optional secret key for generating obfuscated download URLs
+    #[arg(long, env = "DOWNLOAD_SECRET")]
+    download_secret: Option<String>,
 }
 
 #[tokio::main]
@@ -65,6 +75,16 @@ async fn main() -> Result<()> {
     tracing::info!("  Apps Directory: {}", args.apps_dir.display());
     if let Some(ref base_url) = args.external_base_url {
         tracing::info!("  External Base URL: {}", base_url);
+    }
+    if args.auth_token.is_some() {
+        tracing::info!("  Authentication: Enabled (token required as query parameter)");
+    } else {
+        tracing::info!("  Authentication: Disabled");
+    }
+    if args.download_secret.is_some() {
+        tracing::info!("  Download URLs: Obfuscated (using secret key)");
+    } else {
+        tracing::info!("  Download URLs: Standard (non-obfuscated)");
     }
 
     // Determine base path (current directory)
@@ -113,6 +133,8 @@ async fn main() -> Result<()> {
         base_path: base_path.clone(),
         apps_dir,
         external_base_url,
+        auth_token: args.auth_token,
+        download_secret: args.download_secret.map(Arc::new),
     };
 
     // Configure CORS (allow all origins for AltStore compatibility)
@@ -123,9 +145,14 @@ async fn main() -> Result<()> {
 
     // Build the router
     let app = Router::new()
-        .route("/", get(serve_info))
+        .route("/", get(routes::serve_repository_json))
         .route("/repository.json", get(routes::serve_repository_json))
         .route("/apps/:app_name/:filename", get(routes::serve_ipa))
+        .route("/download/:token", get(routes::serve_ipa_obfuscated))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::validate_token,
+        ))
         .layer(cors)
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state);
@@ -145,67 +172,4 @@ async fn main() -> Result<()> {
     axum::serve(listener, app).await.context("Server error")?;
 
     Ok(())
-}
-
-/// Serves basic information about the server
-async fn serve_info() -> impl IntoResponse {
-    let html = r#"
-<!DOCTYPE html>
-<html>
-<head>
-    <title>AltStore Repository Server</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            max-width: 800px;
-            margin: 50px auto;
-            padding: 20px;
-            line-height: 1.6;
-        }
-        h1 { color: #333; }
-        code {
-            background: #f4f4f4;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-family: "Monaco", "Menlo", "Courier New", monospace;
-        }
-        .endpoint {
-            background: #f8f8f8;
-            border-left: 4px solid #007AFF;
-            padding: 10px 15px;
-            margin: 10px 0;
-        }
-        .endpoint code {
-            background: transparent;
-        }
-    </style>
-</head>
-<body>
-    <h1>AltStore Repository Server</h1>
-    <p>This server hosts an AltStore repository for distributing iOS applications.</p>
-
-    <h2>Available Endpoints</h2>
-
-    <div class="endpoint">
-        <strong>GET /repository.json</strong><br>
-        Returns the repository manifest (apps.json)
-    </div>
-
-    <div class="endpoint">
-        <strong>GET /apps/:app_name/:filename</strong><br>
-        Downloads IPA files<br>
-        Example: <code>/apps/YTLite/YouTubePlus_5.2b1_20.26.7.ipa</code>
-    </div>
-
-    <h2>Usage</h2>
-    <p>Add this repository to AltStore using the repository URL:</p>
-    <code>http://[your-server-address]/repository.json</code>
-
-    <hr>
-    <p><small>Powered by Rust + axum</small></p>
-</body>
-</html>
-    "#;
-
-    (StatusCode::OK, Html(html))
 }

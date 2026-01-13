@@ -10,4 +10,7 @@ pub struct AppState {
     pub base_path: PathBuf,
     pub apps_dir: PathBuf,
     pub external_base_url: String,
+    pub auth_token: Option<String>,
+    /// Optional secret key for generating obfuscated download tokens
+    pub download_secret: Option<Arc<String>>,
 }

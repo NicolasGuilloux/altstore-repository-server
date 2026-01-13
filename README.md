@@ -8,7 +8,7 @@ A dynamic AltStore repository server built with Rust and Axum that automatically
 
 1. **Build the Docker image:**
    ```bash
-   docker build -t altstore-repository-server .
+   docker build -f docker/Dockerfile -t altstore-repository-server .
    ```
 
 2. **Run the container:**
@@ -133,9 +133,9 @@ The server extracts version information from IPA filenames:
 
 ### Format 1: Tweaked Apps (3 parts)
 ```
-AppName_tweakVersion_appVersion.ipa
+AppName_appVersion.ipa
 ```
-Example: `YouTubePlus_5.2b1_20.26.7.ipa`
+Example: `YourApp_v1.2.3.ipa`
 - Version: `20.26.7`
 - Description: "Version 20.26.7 (tweak version: 5.2b1)"
 
@@ -263,7 +263,7 @@ RUST_LOG=debug cargo run
 
 1. **Build the Docker image:**
    ```bash
-   docker build -t altstore-repository-server:latest .
+   docker build -f docker/Dockerfile -t altstore-repository-server:latest .
    ```
 
 2. **Run the container:**

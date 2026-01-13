@@ -35,7 +35,7 @@ devenv update
 ```
 /
 ├── apps/                # App storage directory
-│   └── YTLite/         # App-specific subdirectory
+│   └── YourApp/         # App-specific subdirectory
 │       └── *.ipa       # iOS app packages (auto-discovered)
 ├── config.json          # Base configuration (app metadata without versions)
 ├── src/                 # Rust web server source code
@@ -63,7 +63,7 @@ The server dynamically generates `repository.json` by combining:
 2. **Filesystem Discovery** - Version information (dynamic):
    - Automatically scans `apps/` directory for app subdirectories
    - Discovers IPA files in each app subdirectory
-   - Extracts version info from filenames (e.g., `YouTubePlus_5.2b1_20.26.7.ipa`)
+   - Extracts version info from filenames (e.g., `YourApp_v1.2.3.ipa`)
    - Generates download URLs pointing to the server
    - Includes file sizes and current date
 
@@ -72,9 +72,9 @@ The `/repository.json` endpoint serves this dynamically generated manifest.
 ### App Management Workflow
 
 **Adding IPAs (Automatic Version Detection):**
-1. Place IPA file in the app's directory under `apps/` (e.g., `apps/YTLite/YouTubePlus_5.2b1_20.26.7.ipa`)
+1. Place IPA file in the app's directory under `apps/` (e.g., `apps/YourApp/YourApp_v1.2.3.ipa`)
 2. Server automatically discovers and generates version entry
-3. Filename format: `AppName_tweakVersion_appVersion.ipa` or `AppName_version.ipa`
+3. Filename format: `AppName_appVersion.ipa` or `AppName_version.ipa`
 4. No manual JSON updates needed for versions!
 
 **Configuring Apps (One-Time Setup):**
@@ -99,6 +99,8 @@ The `/repository.json` endpoint serves this dynamically generated manifest.
   - `LISTEN_URL`: Server bind address (default: 0.0.0.0)
   - `LISTEN_PORT`: Server port (default: 8080)
   - `EXTERNAL_BASE_URL`: Public URL for download links
+  - `AUTH_TOKEN`: Optional authentication token for API access
+  - `DOWNLOAD_SECRET`: Optional secret for obfuscated URLs (when set, disables direct downloads)
 - **devenv.nix**: Development environment packages and language configurations
 - **.envrc**: Direnv integration for automatic environment loading
 
@@ -129,8 +131,8 @@ The `/repository.json` endpoint serves this dynamically generated manifest.
 
 1. Place new IPA file in the app's subdirectory with proper naming:
    - Location: `apps/AppName/filename.ipa`
-   - Format: `AppName_tweakVersion_appVersion.ipa` or `AppName_version.ipa`
-   - Example: `apps/YTLite/YouTubePlus_5.2b4_21.02.3.ipa`
+   - Format: `AppName_appVersion.ipa` or `AppName_version.ipa`
+   - Example: `apps/YourApp/YourApp_v1.2.3.ipa`
 2. Server automatically adds the new version to `/repository.json`
 3. Optionally update `news` array in `config.json` to notify users
 
@@ -160,10 +162,27 @@ curl http://localhost:8080/repository.json
 
 - IPAs can be stored locally or on external cloud storage
 - When using the Rust server:
-  - IPAs are served directly from `/apps/:appName/:filename` endpoint
+  - IPAs are served via two possible endpoints (see Download Security below)
   - Download URLs are dynamically generated based on `EXTERNAL_BASE_URL`
   - Large files are streamed efficiently using Tokio
 - The AltStore client fetches `/repository.json` from the server
+
+### Download Security
+
+The server supports two download modes based on the `DOWNLOAD_SECRET` environment variable:
+
+**Without DOWNLOAD_SECRET (Standard Mode):**
+- Direct downloads: `/apps/:appName/:filename` endpoint is available
+- Repository JSON contains standard URLs like `/apps/AppName/app.ipa`
+- URLs are predictable but simpler to configure
+
+**With DOWNLOAD_SECRET (Secure Mode):**
+- Direct downloads: `/apps/:appName/:filename` returns **403 Forbidden**
+- Obfuscated downloads: Only `/download/:token` endpoint works
+- Repository JSON contains obfuscated URLs like `/download/abc123xyz`
+- Tokens are deterministic SHA256-based hashes (app + filename + secret)
+- Prevents unauthorized access by URL guessing
+- **Recommended for production deployments**
 
 ## Development Guidelines
 
@@ -179,8 +198,8 @@ curl http://localhost:8080/repository.json
 The server parses IPA filenames to extract version information:
 
 **Three-part format** (recommended for tweaked apps):
-- Pattern: `AppName_tweakVersion_appVersion.ipa`
-- Example: `YouTubePlus_5.2b1_20.26.7.ipa`
+- Pattern: `AppName_appVersion.ipa`
+- Example: `YourApp_v1.2.3.ipa`
 - Generates: version "20.26.7", description includes "tweak version: 5.2b1"
 
 **Two-part format** (standard apps):

@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn test_is_valid_path_component() {
         // Valid components
-        assert!(is_valid_path_component("YTLite"));
+        assert!(is_valid_path_component("YourApp"));
         assert!(is_valid_path_component("App123"));
         assert!(is_valid_path_component("my_app"));
 

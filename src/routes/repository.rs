@@ -2,14 +2,22 @@ use crate::discovery::discover_ipas;
 use crate::generator::generate_repository;
 use crate::state::AppState;
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
 };
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+pub struct RepositoryQuery {
+    #[serde(default)]
+    token: Option<String>,
+}
 
 /// Dynamically generates and serves repository.json based on config.json and discovered IPAs
 pub async fn serve_repository_json(
     State(state): State<AppState>,
+    Query(query): Query<RepositoryQuery>,
 ) -> Result<Response, (StatusCode, String)> {
     tracing::debug!("Generating repository.json dynamically");
 
@@ -25,15 +33,24 @@ pub async fn serve_repository_json(
     // Clone the config to avoid holding the Arc lock
     let config = (*state.config).clone();
 
+    // Get download secret if configured
+    let download_secret = state.download_secret.as_ref().map(|s| s.as_str());
+
     // Generate the repository with populated versions from discovered IPAs
-    let repository =
-        generate_repository(config, &ipa_index, &state.external_base_url).map_err(|err| {
-            tracing::error!("Failed to generate repository: {}", err);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to generate repository manifest: {}", err),
-            )
-        })?;
+    let repository = generate_repository(
+        config,
+        &ipa_index,
+        &state.external_base_url,
+        download_secret,
+        query.token.as_deref(),
+    )
+    .map_err(|err| {
+        tracing::error!("Failed to generate repository: {}", err);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to generate repository manifest: {}", err),
+        )
+    })?;
 
     // Serialize to JSON
     let content = serde_json::to_string_pretty(&repository).map_err(|err| {

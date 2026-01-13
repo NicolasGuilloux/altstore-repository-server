@@ -1,5 +1,6 @@
 use crate::discovery::{discover_ipas, is_valid_path_component};
 use crate::state::AppState;
+use crate::token::generate_download_token;
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -15,6 +16,21 @@ pub async fn serve_ipa(
     State(state): State<AppState>,
 ) -> Result<Response, (StatusCode, String)> {
     tracing::debug!("Request for IPA: {}/{}", app_name, filename);
+
+    // If DOWNLOAD_SECRET is configured, direct downloads are disabled
+    // Users must use obfuscated /download/:token URLs instead
+    if state.download_secret.is_some() {
+        tracing::warn!(
+            "Direct download attempt rejected (DOWNLOAD_SECRET configured): {}/{}",
+            app_name,
+            filename
+        );
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Direct downloads are disabled. Use the repository URL to access downloads."
+                .to_string(),
+        ));
+    }
 
     // Validate path components to prevent directory traversal
     if !is_valid_path_component(&app_name) {
@@ -102,4 +118,79 @@ pub async fn serve_ipa(
         })?;
 
     Ok(response)
+}
+
+/// Serves IPA files using obfuscated download tokens
+/// This handler searches for the IPA that matches the provided token
+pub async fn serve_ipa_obfuscated(
+    Path(token): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Response, (StatusCode, String)> {
+    tracing::debug!("Request for IPA with token: {}", token);
+
+    // Re-discover IPAs to get current filesystem state
+    let ipa_index = discover_ipas(&state.apps_dir).map_err(|err| {
+        tracing::error!("Failed to discover IPAs: {}", err);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to discover IPA files: {}", err),
+        )
+    })?;
+
+    // Get the secret if configured
+    let secret = state.download_secret.as_ref().map(|s| s.as_str());
+
+    // Search through all apps and IPAs to find the one matching this token
+    for (app_name, ipas) in ipa_index.iter() {
+        for ipa in ipas {
+            let ipa_token = generate_download_token(app_name, &ipa.filename, secret);
+
+            if ipa_token == token {
+                // Found the matching IPA!
+                tracing::info!(
+                    "Serving IPA via obfuscated URL: {}/{} ({} bytes)",
+                    app_name,
+                    ipa.filename,
+                    ipa.size
+                );
+
+                // Open the file for streaming
+                let file = File::open(&ipa.path).await.map_err(|err| {
+                    tracing::error!("Failed to open IPA file: {}", err);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Failed to open file: {}", err),
+                    )
+                })?;
+
+                // Create a stream from the file
+                let stream = ReaderStream::new(file);
+                let body = Body::from_stream(stream);
+
+                // Build response with proper headers
+                let response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "application/octet-stream")
+                    .header(header::CONTENT_LENGTH, ipa.size.to_string())
+                    .header(
+                        header::CONTENT_DISPOSITION,
+                        format!("attachment; filename=\"{}\"", ipa.filename),
+                    )
+                    .body(body)
+                    .map_err(|err| {
+                        tracing::error!("Failed to build response: {}", err);
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to build response: {}", err),
+                        )
+                    })?;
+
+                return Ok(response);
+            }
+        }
+    }
+
+    // No matching token found
+    tracing::debug!("No IPA found for token: {}", token);
+    Err((StatusCode::NOT_FOUND, "Download not found".to_string()))
 }
