@@ -193,6 +193,72 @@ The server supports two download modes based on the `DOWNLOAD_SECRET` environmen
 - Metadata in `config.json` should be accurate and complete
 - Test the server locally before deploying changes
 
+## Testing Guidelines
+
+This project follows **Test-Driven Development (TDD)** methodology. Tests must be written before implementation code to ensure comprehensive coverage and better design.
+
+### TDD Workflow (Red-Green-Refactor)
+
+1. **Red**: Write a failing test that describes the expected behavior
+2. **Green**: Write the minimum implementation code to make the test pass
+3. **Refactor**: Improve the code while keeping tests passing
+
+### Test Coverage Expectations
+
+Every new feature or bug fix should include tests covering:
+
+- **Happy paths**: Normal, expected use cases
+- **Edge cases**: Boundary conditions, empty inputs, minimum/maximum values
+- **Error conditions**: Invalid inputs, missing files, malformed data
+
+### Running Tests
+
+```bash
+# Run all tests
+cargo test
+
+# Run tests with output displayed
+cargo test -- --nocapture
+
+# Run tests for a specific module
+cargo test generator::tests
+
+# Check that tests compile without running them
+cargo test --no-run
+```
+
+### Test Organization
+
+Tests are organized as inline modules at the bottom of each source file using Rust's convention:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_example() {
+        // Test implementation
+    }
+}
+```
+
+**Source files with tests:**
+- `src/generator.rs` - Repository generation logic tests
+- `src/discovery.rs` - IPA file discovery tests
+- `src/token.rs` - Download token generation tests
+- `src/ipa_info.rs` - IPA metadata extraction tests
+
+### Writing New Tests
+
+When adding new functionality:
+
+1. **First**, write tests that describe the expected behavior
+2. **Run tests** to confirm they fail (red phase)
+3. **Implement** the minimum code to pass the tests (green phase)
+4. **Refactor** for clarity and maintainability
+5. **Verify** all tests still pass
+
 ## IPA Filename Conventions
 
 The server parses IPA filenames to extract version information:
