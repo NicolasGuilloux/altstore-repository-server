@@ -252,7 +252,8 @@ mod tests {
 
     #[test]
     fn test_parse_version_from_filename_three_parts() {
-        let result = parse_version_from_filename("YourApp_v1.2.3.ipa", "2025-01-13").unwrap();
+        let result =
+            parse_version_from_filename("YourApp_5.2b1_20.26.7.ipa", "2025-01-13").unwrap();
         assert_eq!(result.version, "20.26.7");
         assert!(result.description.contains("5.2b1"));
         assert_eq!(result.date, "2025-01-13");
