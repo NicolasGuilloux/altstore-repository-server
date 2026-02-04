@@ -1,4 +1,5 @@
 mod auth;
+mod cache;
 mod discovery;
 mod generator;
 mod ipa_info;
@@ -14,6 +15,7 @@ use axum::{
     routing::get,
     Router,
 };
+use cache::IpaCache;
 use clap::Parser;
 use discovery::discover_ipas;
 use state::AppState;
@@ -32,10 +34,6 @@ struct Args {
     /// Server listen port
     #[arg(long, env = "LISTEN_PORT", default_value = "8080")]
     listen_port: u16,
-
-    /// External base URL for download links
-    #[arg(long, env = "EXTERNAL_BASE_URL")]
-    external_base_url: Option<String>,
 
     /// Directory containing app IPA files
     #[arg(long, env = "APPS_DIR", default_value = "apps")]
@@ -73,9 +71,6 @@ async fn main() -> Result<()> {
     tracing::info!("  Listen URL: {}", args.listen_url);
     tracing::info!("  Listen Port: {}", args.listen_port);
     tracing::info!("  Apps Directory: {}", args.apps_dir.display());
-    if let Some(ref base_url) = args.external_base_url {
-        tracing::info!("  External Base URL: {}", base_url);
-    }
     if args.auth_token.is_some() {
         tracing::info!("  Authentication: Enabled (token required as query parameter)");
     } else {
@@ -113,28 +108,26 @@ async fn main() -> Result<()> {
         serde_json::from_str(&config_content).context("Failed to parse config.json")?;
     tracing::info!("Loaded configuration for: {}", config.name);
 
-    // Discover IPAs
-    let ipa_index = discover_ipas(&apps_dir).context("Failed to discover IPAs")?;
+    // Discover IPAs (without cache for initial discovery)
+    let ipa_index = discover_ipas(&apps_dir, None)
+        .await
+        .context("Failed to discover IPAs")?;
 
     if ipa_index.is_empty() {
         tracing::warn!("No IPAs discovered. Server will still run but no apps are available.");
     }
 
-    // Determine external base URL
-    let external_base_url = args
-        .external_base_url
-        .unwrap_or_else(|| format!("http://{}:{}", args.listen_url, args.listen_port));
-
-    tracing::info!("Repository URL: {}/repository.json", external_base_url);
+    // Create IPA metadata cache
+    let ipa_cache = Arc::new(IpaCache::new());
 
     // Create shared application state
     let state = AppState {
         config: Arc::new(config),
         base_path: base_path.clone(),
         apps_dir,
-        external_base_url,
         auth_token: args.auth_token,
         download_secret: args.download_secret.map(Arc::new),
+        ipa_cache,
     };
 
     // Configure CORS (allow all origins for AltStore compatibility)

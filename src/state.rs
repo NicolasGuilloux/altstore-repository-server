@@ -1,3 +1,4 @@
+use crate::cache::IpaCache;
 use crate::models::Config;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,8 +10,9 @@ pub struct AppState {
     #[allow(dead_code)]
     pub base_path: PathBuf,
     pub apps_dir: PathBuf,
-    pub external_base_url: String,
     pub auth_token: Option<String>,
     /// Optional secret key for generating obfuscated download tokens
     pub download_secret: Option<Arc<String>>,
+    /// Cache for IPA metadata to avoid repeated extraction
+    pub ipa_cache: Arc<IpaCache>,
 }

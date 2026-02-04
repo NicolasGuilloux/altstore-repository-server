@@ -2,13 +2,18 @@ name: Build and Release
 
 on:
   push:
+    branches: [ main ]
     tags:
       - '*'
 
 jobs:
-  build_bianries:
+  tests:
+      uses: ./.github/workflows/tests.yml
+      
+  build_binaries:
     name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
     runs-on: ubuntu-latest
+    needs: [tests]
     strategy:
       matrix:
         include:
@@ -48,6 +53,7 @@ jobs:
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
+        if: ${{ github.event_name == 'release' }}
         with:
           name: paperless-scanner-${{ matrix.goos }}-${{ matrix.goarch }}
           path: paperless-scanner-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}
@@ -55,6 +61,7 @@ jobs:
 
   build-and-push-image:
     runs-on: ubuntu-latest
+    needs: [tests]
     steps:
       - name: Log in to the Container registry
         uses: docker/login-action@v3

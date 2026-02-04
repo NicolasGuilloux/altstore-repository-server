@@ -49,14 +49,16 @@ pub async fn serve_ipa(
         ));
     }
 
-    // Re-discover IPAs to get current filesystem state
-    let ipa_index = discover_ipas(&state.apps_dir).map_err(|err| {
-        tracing::error!("Failed to discover IPAs: {}", err);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to discover IPA files: {}", err),
-        )
-    })?;
+    // Re-discover IPAs to get current filesystem state (using cache)
+    let ipa_index = discover_ipas(&state.apps_dir, Some(&state.ipa_cache))
+        .await
+        .map_err(|err| {
+            tracing::error!("Failed to discover IPAs: {}", err);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to discover IPA files: {}", err),
+            )
+        })?;
 
     // Look up the app in the index
     let app_ipas = ipa_index.get(&app_name).ok_or_else(|| {
@@ -128,14 +130,16 @@ pub async fn serve_ipa_obfuscated(
 ) -> Result<Response, (StatusCode, String)> {
     tracing::debug!("Request for IPA with token: {}", token);
 
-    // Re-discover IPAs to get current filesystem state
-    let ipa_index = discover_ipas(&state.apps_dir).map_err(|err| {
-        tracing::error!("Failed to discover IPAs: {}", err);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to discover IPA files: {}", err),
-        )
-    })?;
+    // Re-discover IPAs to get current filesystem state (using cache)
+    let ipa_index = discover_ipas(&state.apps_dir, Some(&state.ipa_cache))
+        .await
+        .map_err(|err| {
+            tracing::error!("Failed to discover IPAs: {}", err);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to discover IPA files: {}", err),
+            )
+        })?;
 
     // Get the secret if configured
     let secret = state.download_secret.as_ref().map(|s| s.as_str());

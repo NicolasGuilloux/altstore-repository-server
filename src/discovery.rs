@@ -1,10 +1,11 @@
+use crate::cache::{CachedIpaInfo, IpaCache};
 use crate::ipa_info;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
 /// Represents a discovered IPA file with extracted metadata
@@ -47,7 +48,8 @@ pub fn is_valid_path_component(component: &str) -> bool {
 }
 
 /// Discovers all IPA files in app directories under the apps directory
-pub fn discover_ipas(apps_path: &Path) -> Result<IpaIndex> {
+/// Optionally uses a cache to avoid re-extracting IPA metadata
+pub async fn discover_ipas(apps_path: &Path, cache: Option<&IpaCache>) -> Result<IpaIndex> {
     let mut index: IpaIndex = HashMap::new();
 
     tracing::info!("Scanning for IPAs in: {}", apps_path.display());
@@ -117,7 +119,7 @@ pub fn discover_ipas(apps_path: &Path) -> Result<IpaIndex> {
                     };
 
                     // Get file size and modification date
-                    let (size, modified_date) = match fs::metadata(ipa_path) {
+                    let (size, modified_date, mtime_secs) = match fs::metadata(ipa_path) {
                         Ok(metadata) => {
                             let size = metadata.len();
 
@@ -126,7 +128,13 @@ pub fn discover_ipas(apps_path: &Path) -> Result<IpaIndex> {
                             let datetime: DateTime<Utc> = modified_time.into();
                             let date_str = datetime.format("%Y-%m-%d").to_string();
 
-                            (size, date_str)
+                            // Get mtime as seconds since epoch for cache key
+                            let mtime_secs = modified_time
+                                .duration_since(UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0);
+
+                            (size, date_str, mtime_secs)
                         }
                         Err(err) => {
                             tracing::warn!("Failed to get metadata for {}: {}", filename, err);
@@ -134,32 +142,88 @@ pub fn discover_ipas(apps_path: &Path) -> Result<IpaIndex> {
                         }
                     };
 
-                    // Extract Info.plist information from IPA
+                    // Build cache key from path and modification time
+                    let cache_key = (ipa_path.to_path_buf(), mtime_secs);
+
+                    // Extract Info.plist information from IPA (with cache support)
                     let (bundle_identifier, bundle_version, bundle_short_version, bundle_name) =
-                        match ipa_info::extract_ipa_info(ipa_path) {
-                            Ok(info) => {
-                                tracing::info!(
-                                    "Extracted info from {}/{}: version={}, bundle_id={}",
-                                    dir_name,
-                                    filename,
-                                    info.bundle_version,
-                                    info.bundle_identifier
-                                );
+                        if let Some(cache) = cache {
+                            // Check cache first
+                            if let Some(cached_info) = cache.get(&cache_key).await {
+                                tracing::info!("Cache hit for {}", filename);
                                 (
-                                    Some(info.bundle_identifier),
-                                    Some(info.bundle_version),
-                                    info.bundle_short_version,
-                                    Some(info.bundle_name),
+                                    Some(cached_info.bundle_identifier),
+                                    Some(cached_info.bundle_version),
+                                    cached_info.bundle_short_version,
+                                    Some(cached_info.bundle_name),
                                 )
+                            } else {
+                                tracing::info!("Cache miss for {}", filename);
+                                // Extract from IPA and cache the result
+                                match ipa_info::extract_ipa_info(ipa_path) {
+                                    Ok(info) => {
+                                        tracing::info!(
+                                            "Extracted info from {}/{}: version={}, bundle_id={}",
+                                            dir_name,
+                                            filename,
+                                            info.bundle_version,
+                                            info.bundle_identifier
+                                        );
+
+                                        // Store in cache for future use
+                                        let cached_info = CachedIpaInfo {
+                                            bundle_identifier: info.bundle_identifier.clone(),
+                                            bundle_version: info.bundle_version.clone(),
+                                            bundle_short_version: info.bundle_short_version.clone(),
+                                            bundle_name: info.bundle_name.clone(),
+                                        };
+                                        cache.insert(cache_key, cached_info).await;
+
+                                        (
+                                            Some(info.bundle_identifier),
+                                            Some(info.bundle_version),
+                                            info.bundle_short_version,
+                                            Some(info.bundle_name),
+                                        )
+                                    }
+                                    Err(err) => {
+                                        tracing::warn!(
+                                            "Failed to extract Info.plist from {}/{}: {}",
+                                            dir_name,
+                                            filename,
+                                            err
+                                        );
+                                        (None, None, None, None)
+                                    }
+                                }
                             }
-                            Err(err) => {
-                                tracing::warn!(
-                                    "Failed to extract Info.plist from {}/{}: {}",
-                                    dir_name,
-                                    filename,
-                                    err
-                                );
-                                (None, None, None, None)
+                        } else {
+                            // No cache provided, extract directly
+                            match ipa_info::extract_ipa_info(ipa_path) {
+                                Ok(info) => {
+                                    tracing::info!(
+                                        "Extracted info from {}/{}: version={}, bundle_id={}",
+                                        dir_name,
+                                        filename,
+                                        info.bundle_version,
+                                        info.bundle_identifier
+                                    );
+                                    (
+                                        Some(info.bundle_identifier),
+                                        Some(info.bundle_version),
+                                        info.bundle_short_version,
+                                        Some(info.bundle_name),
+                                    )
+                                }
+                                Err(err) => {
+                                    tracing::warn!(
+                                        "Failed to extract Info.plist from {}/{}: {}",
+                                        dir_name,
+                                        filename,
+                                        err
+                                    );
+                                    (None, None, None, None)
+                                }
                             }
                         };
 

@@ -18,7 +18,6 @@ A dynamic AltStore repository server built with Rust and Axum that automatically
      -p 8080:8080 \
      -v $(pwd)/apps:/apps:ro \
      -v $(pwd)/config.json:/app/config.json:ro \
-     -e EXTERNAL_BASE_URL=https://your-domain.com \
      altstore-repository-server
    ```
 
@@ -69,8 +68,9 @@ altstore-repository-server --help
 |----------|---------------------|-------------|---------|
 | `--listen-url` | `LISTEN_URL` | Server bind address | `0.0.0.0` |
 | `--listen-port` | `LISTEN_PORT` | Server port | `8080` |
-| `--external-base-url` | `EXTERNAL_BASE_URL` | Public URL for download links | `http://<listen-url>:<listen-port>` |
 | `--apps-dir` | `APPS_DIR` | Directory containing IPA files | `apps` |
+
+**Note:** Download URLs are automatically generated based on the incoming request headers. See [URL Generation](#url-generation) for details.
 
 ### Examples
 
@@ -78,14 +78,12 @@ altstore-repository-server --help
 ```bash
 ./altstore-repository-server \
   --listen-port 9123 \
-  --external-base-url https://altstore.example.com \
   --apps-dir /path/to/apps
 ```
 
 **Using environment variables:**
 ```bash
 export LISTEN_PORT=9123
-export EXTERNAL_BASE_URL=https://altstore.example.com
 export APPS_DIR=/path/to/apps
 ./altstore-repository-server
 ```
@@ -191,6 +189,50 @@ Returns the dynamically generated AltStore repository manifest.
 ### GET /apps/:appName/:filename
 Downloads the specified IPA file with streaming support.
 
+## URL Generation
+
+The server automatically generates download URLs based on the incoming HTTP request headers. No external URL configuration is required.
+
+### Direct Access
+
+When accessing the server directly, URLs are generated from the `Host` header:
+
+```bash
+# Request to localhost
+curl http://localhost:8080/repository.json
+# → URLs contain: http://localhost:8080/apps/...
+
+# Request to custom host
+curl -H "Host: myapp.local:9123" http://localhost:8080/repository.json
+# → URLs contain: http://myapp.local:9123/apps/...
+```
+
+### Behind a Reverse Proxy
+
+When running behind a reverse proxy (nginx, traefik, etc.), the server respects forwarded headers:
+
+- **X-Forwarded-Proto**: Determines the URL scheme (http/https)
+- **X-Forwarded-Host**: Determines the hostname
+
+```bash
+# With reverse proxy headers
+curl -H "X-Forwarded-Proto: https" -H "X-Forwarded-Host: altstore.example.com" \
+  http://localhost:8080/repository.json
+# → URLs contain: https://altstore.example.com/apps/...
+```
+
+**Nginx configuration example:**
+```nginx
+location / {
+    proxy_pass http://localhost:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+}
+```
+
+This approach eliminates the need for any external URL configuration - the server automatically adapts to wherever it's accessed from.
+
 ## Workflow
 
 ### Adding a New App
@@ -275,7 +317,6 @@ RUST_LOG=debug cargo run
      -v /path/to/apps:/apps:ro \
      -v /path/to/config.json:/app/config.json:ro \
      -e LISTEN_PORT=8080 \
-     -e EXTERNAL_BASE_URL=https://altstore.example.com \
      -e RUST_LOG=altstore_server=info,tower_http=info \
      altstore-repository-server:latest
    ```
@@ -329,7 +370,6 @@ RUST_LOG=debug cargo run
    WorkingDirectory=/opt/altstore
    ExecStart=/opt/altstore/altstore-repository-server \
      --listen-port 8080 \
-     --external-base-url https://altstore.example.com \
      --apps-dir /opt/altstore/apps
    Restart=always
    RestartSec=10
